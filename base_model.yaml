@@ -1,0 +1,18 @@
+# ========================================
+# Base Model Training Config (基础模型训练配置)
+# ========================================
+
+# 数据集与基础参数
+data_path: "./dataset"       # 训练/验证集 txt 文件的存放路径
+num_classes: 2               # 分类数：0-噪声/伪源, 1-恒星源
+epochs: 100                  # 总训练轮数
+batch_size: 64               # 批大小
+lr: 0.0001                   # 初始学习率
+img_size: 224                # 模型输入图像尺寸
+
+# 网络架构与权重
+pretrained: "./weights/swin_tiny_patch4_window7_224.pth"  # 官方预训练权重（用于初始化）
+freeze_layers: false         # 基础阶段：不冻结权重，全网络更新
+
+# 数据增强控制
+use_transform: true          # 开启数据增强（随机裁剪、翻转等）
