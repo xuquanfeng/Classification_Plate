@@ -97,7 +97,7 @@ python inference.py --input_catalog raw.cat --image_dir ./images --output_catalo
       title={Enhancing astrometric registration of Chinese historical Astronomical Digital Plates with deep learning}, 
       author={Quanfeng Xu and Zhengjun Shang and Shiyin Shen and Yong Yu and Meiting Yang and Hao Luo and Zhenghong Tang and Jing Yang and Jianhai Zhao},
       journal={Research in Astronomy and Astrophysics},
-      url={[http://iopscience.iop.org/article/10.1088/1674-4527/ae5f6a](http://iopscience.iop.org/article/10.1088/1674-4527/ae5f6a)},
+      url={http://iopscience.iop.org/article/10.1088/1674-4527/ae5f6a},
       year={2026}
 }
 
