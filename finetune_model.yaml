@@ -1,0 +1,18 @@
+# ========================================
+# Fine-Tuned Model Config (微调模型训练配置)
+# ========================================
+
+# 数据集与基础参数
+data_path: "./dataset_degraded" # (可选) 如果你把退化底片单独放了一个目录
+num_classes: 2
+epochs: 50                   # 微调通常不需要太多轮次
+batch_size: 32               # 微调时批大小可以适当调整
+lr: 0.00001                  # 微调阶段：使用更小的学习率避免破坏已有特征
+img_size: 224
+
+# 网络架构与权重
+pretrained: "./checkpoints/model_best.pth"  # 载入你在第一阶段（Base Model）训练好的最佳权重
+freeze_layers: true          # 开启冻结策略：只训练特定的层（如分类头）
+
+# 数据增强控制
+use_transform: true
