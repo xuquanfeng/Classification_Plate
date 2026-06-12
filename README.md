@@ -107,7 +107,3 @@ python inference.py --input_catalog raw.cat --image_dir ./images --output_catalo
 
 * 本项目部分代码参考了开源社区，非常感谢！
 * 欢迎探讨交流。如有任何技术问题或建议，欢迎在 GitHub 提交 Issue 进行讨论。
-
-```
-
-```
