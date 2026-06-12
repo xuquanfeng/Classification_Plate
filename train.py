@@ -1,5 +1,6 @@
 import os
 import argparse
+import yaml
 
 import torch
 import torch.optim as optim
@@ -11,43 +12,63 @@ from model import swin_tiny_patch4_window7_224 as create_model
 from utils import read_split_data, train_one_epoch, evaluate
 
 
+def load_config(config_path):
+    """读取 YAML 配置文件"""
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
+
+
 def main(args):
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    os.makedirs("train_proces", exist_ok=True)
-    os.makedirs("weights", exist_ok=True)
-
-    tb_writer = SummaryWriter()
-
-    # img_size = args.img_size
-    # data_transform = {
-    #     "train": transforms.Compose([transforms.RandomResizedCrop(img_size * 1.143),
-    #                                  transforms.RandomHorizontalFlip(),
-    #                                  transforms.ToTensor(),
-    #                                  transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])]),
-    #     "val": transforms.Compose([transforms.Resize(int(img_size * 1.143)),
-    #                                transforms.CenterCrop(img_size),
-    #                                transforms.ToTensor(),
-    #                                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])}
     
-    # data_transform = {
-    #     "train": transforms.Compose(transforms.ToTensor()),
-    #     "val": transforms.Compose(transforms.ToTensor())}
-    data_transform = {
-        "train": None,
-        "val": None}
-    
-    root = args.data_path
-    # 实例化训练数据集
-    train_dataset = MyDataSet(datatxt=root + 'train.txt',
+    # 建立工程目录
+    os.makedirs("runs", exist_ok=True)        # TensorBoard 日志目录
+    os.makedirs("checkpoints", exist_ok=True) # 模型权重保存目录
+    tb_writer = SummaryWriter(log_dir="runs/classification_plate")
+
+    # 1. 载入并合并配置参数
+    config = load_config(args.config) if args.config else {}
+    data_path = args.data_path or config.get("data_path", "./dataset")
+    pretrained = args.pretrained or config.get("pretrained", "")
+    epochs = config.get("epochs", 100)
+    batch_size = config.get("batch_size", 64)
+    lr = config.get("lr", 0.0001)
+    num_classes = config.get("num_classes", 2)
+    freeze_layers = config.get("freeze_layers", False)
+    use_transform = config.get("use_transform", True)
+    img_size = config.get("img_size", 224)
+
+    # 2. 数据增强与预处理 (针对特定的 Application Scenario 调整)
+    if use_transform:
+        data_transform = {
+            "train": transforms.Compose([
+                transforms.RandomResizedCrop(int(img_size * 1.143)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ]),
+            "val": transforms.Compose([
+                transforms.Resize(int(img_size * 1.143)),
+                transforms.CenterCrop(img_size),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ])
+        }
+    else:
+        data_transform = {"train": None, "val": None}
+
+    # 3. 实例化数据集
+    train_dataset = MyDataSet(datatxt=os.path.join(data_path, 'train.txt'),
                               transform=data_transform["train"])
 
-    # 实例化验证数据集
-    val_dataset = MyDataSet(datatxt=root + 'test.txt',
+    val_dataset = MyDataSet(datatxt=os.path.join(data_path, 'test.txt'),
                             transform=data_transform["val"])
 
-    batch_size = args.batch_size
-    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
-    print('Using {} dataloader workers every process'.format(nw))
+    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])
+    print(f'Using {nw} dataloader workers every process')
+    
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                batch_size=batch_size,
                                                shuffle=True,
@@ -62,85 +83,76 @@ def main(args):
                                              num_workers=nw,
                                              collate_fn=val_dataset.collate_fn)
 
-    model = create_model(num_classes=args.num_classes).to(device)
+    # 4. 构建模型与权重加载
+    model = create_model(num_classes=num_classes).to(device)
 
-    if args.weights != "":
-        assert os.path.exists(args.weights), "weights file: '{}' not exist.".format(args.weights)
-        weights_dict = torch.load(args.weights, map_location=device)["model"]
-        # 删除有关分类类别的权重
+    if pretrained != "":
+        assert os.path.exists(pretrained), f"weights file: '{pretrained}' not exist."
+        weights_dict = torch.load(pretrained, map_location=device)["model"]
+        # 删除有关分类类别的权重以便进行微调
         for k in list(weights_dict.keys()):
             if "head" in k:
                 del weights_dict[k]
-        print(model.load_state_dict(weights_dict, strict=False))
+        print("Loaded pretrained weights:", model.load_state_dict(weights_dict, strict=False))
 
-    if args.freeze_layers:
+    # 冻结除 head 外的所有层（适用于基础模型后的微调阶段）
+    if freeze_layers:
         for name, para in model.named_parameters():
-            # 除head外，其他权重全部冻结
             if "head" not in name:
                 para.requires_grad_(False)
             else:
-                print("training {}".format(name))
+                print(f"training {name}")
 
+    # 5. 优化器与训练循环
     pg = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(pg, lr=args.lr, weight_decay=5E-2)
+    optimizer = optim.AdamW(pg, lr=lr, weight_decay=5E-2)
 
-    for epoch in range(args.epochs):
-        # train
+    save_loss = float('inf')
+
+    for epoch in range(epochs):
+        # 训练阶段
         train_loss, train_acc = train_one_epoch(model=model,
                                                 optimizer=optimizer,
                                                 data_loader=train_loader,
                                                 device=device,
                                                 epoch=epoch)
 
-        # validate
+        # 验证阶段
         val_loss, val_acc = evaluate(model=model,
                                      data_loader=val_loader,
                                      device=device,
                                      epoch=epoch)
 
-        tags = ["train_loss", "train_acc", "val_loss", "val_acc", "learning_rate"]
+        # 记录日志
+        tags = ["loss/train", "acc/train", "loss/val", "acc/val", "learning_rate"]
         tb_writer.add_scalar(tags[0], train_loss, epoch)
         tb_writer.add_scalar(tags[1], train_acc, epoch)
         tb_writer.add_scalar(tags[2], val_loss, epoch)
         tb_writer.add_scalar(tags[3], val_acc, epoch)
         tb_writer.add_scalar(tags[4], optimizer.param_groups[0]["lr"], epoch)
 
-        if epoch == 0:
+        # 最佳模型保存策略
+        if val_loss < save_loss:
             save_loss = val_loss
-        elif save_loss > val_loss:
-            save_loss = val_loss
-            # epochs_since_improvement = 0
-            torch.save(model.state_dict(), "./weights/model_best.pth")
-        # else:
-        #     epochs_since_improvement += 1
-        # if epochs_since_improvement == early_stopping_patience:
-        #         print(f"Stopping training early because validation loss has not improved for {early_stopping_patience} epochs.")            
-        #         print('Final the best Test RMSE: ' + str(save_loss))
-        #         break
-        if epoch%10==9 and epoch>=args.epochs-48:
-            torch.save(model.state_dict(), "./weights/model_{}.pth".format(epoch))
+            torch.save(model.state_dict(), "./checkpoints/model_best.pth")
+            print(f"Epoch {epoch}: Best model saved with val_loss: {save_loss:.4f}")
+
+        # 周期性保存模型 (最后48个epoch中每10个保存一次)
+        if epoch % 10 == 9 and epoch >= epochs - 48:
+            torch.save(model.state_dict(), f"./checkpoints/model_{epoch}.pth")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--num_classes', type=int, default=2)
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--lr', type=float, default=0.0001)
-    # parser.add_argument('--img-size', type=int, default=64)
-
-    # 数据集所在根目录
-    # http://download.tensorflow.org/example_images/flower_photos.tgz
-    parser.add_argument('--data-path', type=str,
-                        default='/home/yaowei/lenovo_1/xqf/data/')
-
-    # 预训练权重路径，如果不想载入就设置为空字符
-    parser.add_argument('--weights', type=str, default='./swin_tiny_patch4_window7_224.pth',
-                        help='initial weights path')
-    # 是否冻结权重
-    parser.add_argument('--freeze-layers', type=bool, default=False)
+    parser = argparse.ArgumentParser(description="Astrometric Registration Enhancer Training Script")
+    
+    # 核心架构参数 (与 README 对齐)
+    parser.add_argument('--config', type=str, default='', 
+                        help='Path to the yaml configuration file (e.g., configs/base_model.yaml)')
+    parser.add_argument('--data_path', type=str, default='', 
+                        help='Root directory of the dataset. Overrides config if specified.')
+    parser.add_argument('--pretrained', type=str, default='', 
+                        help='Path to pre-trained weights for fine-tuning. Overrides config if specified.')
     parser.add_argument('--device', default='cuda:0', help='device id (i.e. 0 or 0,1 or cpu)')
 
     opt = parser.parse_args()
-
     main(opt)
